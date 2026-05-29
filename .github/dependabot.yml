@@ -1,0 +1,14 @@
+version: 2
+updates:
+  # Keep the GitHub Actions used in workflows up to date.
+  # Because actions are pinned to commit SHAs, Dependabot bumps the SHA and
+  # updates the "# vX.Y.Z" comment when a new release lands.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Batch all action bumps into a single PR to cut review noise.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
