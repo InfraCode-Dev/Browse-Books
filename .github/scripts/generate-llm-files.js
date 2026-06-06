@@ -115,23 +115,22 @@ const cleanBooks = books.map(b => ({
 fs.writeFileSync(path.join(repoRoot, 'library.json'), JSON.stringify(cleanBooks, null, 2));
 console.log('Generated library.json');
 
-// ── 2. llms.txt ───────────────────────────────────────────────────────────────
+// ── 2a. llms-full.txt (complete per-book dump) ────────────────────────────────
 
-let txt = `# My Audible Library
+let fullTxt = `# My Audible Library — Full Book List
 
-A personal audiobook library with ${books.length} titles.
+A personal audiobook library with ${books.length} titles, sorted A–Z.
 
-> Interactive site:     https://infracode-dev.github.io/Browse-Books/#/library
-> Static HTML version:  https://infracode-dev.github.io/Browse-Books/library-list.html
+> Interactive site:      https://infracode-dev.github.io/Browse-Books/#/library
+> Static HTML version:   https://infracode-dev.github.io/Browse-Books/library-list.html
 > Machine-readable JSON: https://infracode-dev.github.io/Browse-Books/library.json
+> Short index (llms.txt): https://infracode-dev.github.io/Browse-Books/llms.txt
 > Last generated: ${today}
 
-## Summary
+## Stats
 
 - Total: ${books.length} audiobooks
-- Finished: ${finished}
-- In progress: ${inProgress}
-- Not started: ${books.length - finished - inProgress}
+- Finished: ${finished} | In progress: ${inProgress} | Not started: ${books.length - finished - inProgress}
 - Rated: ${rated}
 
 ## Books (A–Z)
@@ -141,19 +140,70 @@ A personal audiobook library with ${books.length} titles.
 for (const book of sortedBooks) {
   const narr   = narratorNames(book);
   const series = seriesLabel(book);
-  txt += `### ${book.title}\n`;
-  txt += `- Author(s): ${authorNames(book)}\n`;
-  if (narr)        txt += `- Narrator(s): ${narr}\n`;
-  if (series)      txt += `- Series: ${series}\n`;
-  if (book.myRating) txt += `- My rating: ${book.myRating}/5\n`;
-  if (book.progress) txt += `- Progress: ${book.progress}\n`;
-  if (book.blurb)  txt += `- Description: ${book.blurb}\n`;
-  txt += `- ASIN: ${book.asin}\n`;
-  txt += '\n';
+  fullTxt += `### ${book.title}\n`;
+  fullTxt += `- Author(s): ${authorNames(book)}\n`;
+  if (narr)          fullTxt += `- Narrator(s): ${narr}\n`;
+  if (series)        fullTxt += `- Series: ${series}\n`;
+  if (book.myRating) fullTxt += `- My rating: ${book.myRating}/5\n`;
+  if (book.progress) fullTxt += `- Progress: ${book.progress}\n`;
+  if (book.blurb)    fullTxt += `- Description: ${book.blurb}\n`;
+  fullTxt += `- ASIN: ${book.asin}\n`;
+  fullTxt += '\n';
 }
 
-fs.writeFileSync(path.join(repoRoot, 'llms.txt'), txt);
-console.log('Generated llms.txt');
+fs.writeFileSync(path.join(repoRoot, 'llms-full.txt'), fullTxt);
+console.log('Generated llms-full.txt');
+
+// ── 2b. llms.txt (short navigational index, per llmstxt.org convention) ──────
+
+const topRated = books
+  .filter(b => b.myRating === '5')
+  .sort((a, b) => (b.added || 0) - (a.added || 0))
+  .slice(0, 10);
+
+const recentlyAdded = [...books]
+  .sort((a, b) => (b.added || 0) - (a.added || 0))
+  .slice(0, 5);
+
+function bookOneLiner(book) {
+  const authors = authorNames(book);
+  const narr    = narratorNames(book);
+  const series  = seriesLabel(book);
+  let line = `- ${book.title} — by ${authors}`;
+  if (narr)   line += `, narrated by ${narr}`;
+  if (series) line += ` (${series})`;
+  return line;
+}
+
+let indexTxt = `# My Audible Library
+
+> A personal Audible audiobook library with ${books.length} titles.
+> Last generated: ${today}
+
+## Formats
+
+- Full book list (plain text, A–Z): https://infracode-dev.github.io/Browse-Books/llms-full.txt
+- Machine-readable JSON:            https://infracode-dev.github.io/Browse-Books/library.json
+- Static HTML (no JavaScript):      https://infracode-dev.github.io/Browse-Books/library-list.html
+- Interactive site:                 https://infracode-dev.github.io/Browse-Books/#/library
+
+## Stats
+
+- Total: ${books.length} audiobooks
+- Finished: ${finished} | In progress: ${inProgress} | Not started: ${books.length - finished - inProgress}
+- Rated: ${rated}
+
+## Top Rated (5★, most recent first)
+
+${topRated.map(bookOneLiner).join('\n')}
+
+## Recently Added
+
+${recentlyAdded.map(bookOneLiner).join('\n')}
+`;
+
+fs.writeFileSync(path.join(repoRoot, 'llms.txt'), indexTxt);
+console.log('Generated llms.txt (short index)');
 
 // ── 3. library-list.html ──────────────────────────────────────────────────────
 
@@ -242,6 +292,7 @@ const html = `<!DOCTYPE html>
     <a href="./#/library">Interactive view</a>
     <a href="./library.json">JSON data</a>
     <a href="./llms.txt">llms.txt</a>
+    <a href="./llms-full.txt">llms-full.txt</a>
   </nav>
   <div class="stats" aria-label="Library statistics">
     <span>${books.length} total</span>
