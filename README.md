@@ -1,5 +1,6 @@
 # Browse Books
 
+
 A static, self-contained gallery of a library starting from the **Audible Library Extractor (ALE)** browser extension (gallery format v0.2.12).
 
 It's plain HTML/CSS/JS with no build step or server required — open `index.html`
