@@ -32,13 +32,21 @@ jobs:
           # Don't leave the GITHUB_TOKEN in .git/config; no later step needs it
           persist-credentials: false
 
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+
+      - name: Generate LLM-readable files
+        run: node .github/scripts/generate-llm-files.js
+
       - name: Setup Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          # The site lives at the repo root (index.html is here, no build step)
+          # Site root, including generated llms.txt, library.json, library-list.html
           path: '.'
 
       - name: Deploy to GitHub Pages
