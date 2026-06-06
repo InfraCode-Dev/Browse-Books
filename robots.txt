@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+
+# LLM-readable versions of this audiobook library:
+# Plain text:  https://infracode-dev.github.io/Browse-Books/llms.txt
+# Clean JSON:  https://infracode-dev.github.io/Browse-Books/library.json
+# Static HTML: https://infracode-dev.github.io/Browse-Books/library-list.html
