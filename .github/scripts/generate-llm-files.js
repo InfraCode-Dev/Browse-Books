@@ -28,12 +28,12 @@ function parseJsDataFile(filePath, varName) {
 function decodeHtmlEntities(str) {
   if (str == null) return '';
   return String(str)
-    .replace(/&amp;/g,  '&')
     .replace(/&lt;/g,   '<')
     .replace(/&gt;/g,   '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g,  "'")
-    .replace(/&apos;/g, "'");
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g,  '&');  // amp must be last to avoid double-decoding
 }
 
 function escapeHtml(str) {
@@ -51,15 +51,31 @@ function stars(n) {
   return '★'.repeat(full) + '☆'.repeat(5 - full);
 }
 
+// Decode any HTML entities in every string field once at load time so that
+// all downstream code (text, JSON, HTML) works with clean values. Callers
+// still call escapeHtml() at the HTML-output boundary.
+function normalizeBook(b) {
+  const d = decodeHtmlEntities;
+  return {
+    ...b,
+    title:     d(b.title),
+    blurb:     b.blurb    ? d(b.blurb)    : b.blurb,
+    progress:  b.progress ? d(b.progress) : b.progress,
+    authors:   (b.authors   || []).map(a => ({ ...a, name: d(a.name) })),
+    narrators: (b.narrators || []).map(n => ({ ...n, name: d(n.name) })),
+    series:    (b.series    || []).map(s => ({ ...s, name: d(s.name) })),
+  };
+}
+
 // ── load data ─────────────────────────────────────────────────────────────────
 
 const dataFiles  = fs.readdirSync(dataDir);
 const libraryFile = dataFiles.find(f => /^library\.\d+\.js$/.test(f));
 if (!libraryFile) { console.error('No library.*.js file found in data/'); process.exit(1); }
 
-const books      = parseJsDataFile(path.join(dataDir, libraryFile), 'libraryJSON');
+const books      = parseJsDataFile(path.join(dataDir, libraryFile), 'libraryJSON').map(normalizeBook);
 const today      = new Date().toISOString().split('T')[0];
-const sortedBooks = [...books].sort((a, b) => a.title.localeCompare(b.title));
+const sortedBooks = [...books].sort((a, b) => (a.title || '').localeCompare(b.title || ''));
 
 const finished   = books.filter(b => b.progress === 'Finished').length;
 const inProgress = books.filter(b => b.progress && b.progress !== 'Finished').length;
@@ -91,7 +107,7 @@ const cleanBooks = books.map(b => ({
   })),
   blurb:      b.blurb    || null,
   rating:     b.myRating ? parseInt(b.myRating) : null,
-  progress:   b.progress ? decodeHtmlEntities(b.progress) : null,
+  progress:   b.progress || null,
   cover_url:  b.cover ? `https://m.media-amazon.com/images/I/${b.cover}._SL200_.jpg` : null,
   audible_url: `https://www.audible.com/pd/${b.asin}`,
 }));
@@ -130,7 +146,7 @@ for (const book of sortedBooks) {
   if (narr)        txt += `- Narrator(s): ${narr}\n`;
   if (series)      txt += `- Series: ${series}\n`;
   if (book.myRating) txt += `- My rating: ${book.myRating}/5\n`;
-  if (book.progress) txt += `- Progress: ${decodeHtmlEntities(book.progress)}\n`;
+  if (book.progress) txt += `- Progress: ${book.progress}\n`;
   if (book.blurb)  txt += `- Description: ${book.blurb}\n`;
   txt += `- ASIN: ${book.asin}\n`;
   txt += '\n';
@@ -147,7 +163,7 @@ const bookCards = sortedBooks.map(book => {
   const series   = escapeHtml(seriesLabel(book));
   const rating   = book.myRating ? escapeHtml(stars(book.myRating)) : null;
   const ratingN  = book.myRating ? parseInt(book.myRating) : null;
-  const progress = book.progress ? escapeHtml(decodeHtmlEntities(book.progress)) : null;
+  const progress = book.progress ? escapeHtml(book.progress) : null;
   const coverUrl = book.cover
     ? `https://m.media-amazon.com/images/I/${book.cover}._SL200_.jpg`
     : null;
