@@ -67,15 +67,43 @@ function normalizeBook(b) {
   };
 }
 
+// Reads data/split-book-data/[ASIN].[cacheID].js files.
+// Each sets window.bookSummaryJSON = "<p>...</p>" (a JSON-encoded HTML string).
+// Returns ASIN → plain-text description map.
+function loadSplitDescriptions() {
+  const splitDir = path.join(dataDir, 'split-book-data');
+  const map = {};
+  if (!fs.existsSync(splitDir)) return map;
+  for (const file of fs.readdirSync(splitDir)) {
+    const match = file.match(/^([^.]+)\.\d+\.js$/);
+    if (!match) continue;
+    const asin = match[1];
+    try {
+      const content = fs.readFileSync(path.join(splitDir, file), 'utf8');
+      const prefix  = 'window.bookSummaryJSON = ';
+      const start   = content.indexOf(prefix);
+      if (start === -1) continue;
+      // Value is a JS string literal (quoted HTML), JSON.parse unwraps the quotes.
+      const html = JSON.parse(content.slice(start + prefix.length).trimEnd().replace(/;\s*$/, ''));
+      const text = decodeHtmlEntities(html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+      if (text) map[asin] = text;
+    } catch { /* skip malformed files */ }
+  }
+  return map;
+}
+
 // ── load data ─────────────────────────────────────────────────────────────────
 
 const dataFiles  = fs.readdirSync(dataDir);
 const libraryFile = dataFiles.find(f => /^library\.\d+\.js$/.test(f));
 if (!libraryFile) { console.error('No library.*.js file found in data/'); process.exit(1); }
 
-const books      = parseJsDataFile(path.join(dataDir, libraryFile), 'libraryJSON').map(normalizeBook);
-const today      = new Date().toISOString().split('T')[0];
-const sortedBooks = [...books].sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+const books            = parseJsDataFile(path.join(dataDir, libraryFile), 'libraryJSON').map(normalizeBook);
+const splitDescriptions = loadSplitDescriptions();
+const today            = new Date().toISOString().split('T')[0];
+const sortedBooks      = [...books].sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+
+console.log(`Loaded ${Object.keys(splitDescriptions).length} full descriptions from split-book-data`);
 
 const finished   = books.filter(b => b.progress === 'Finished').length;
 const inProgress = books.filter(b => b.progress && b.progress !== 'Finished').length;
@@ -105,7 +133,8 @@ const cleanBooks = books.map(b => ({
     bookNumber: s.bookNumbers ? s.bookNumbers.join('/') : null,
     asin:       s.asin || null,
   })),
-  blurb:      b.blurb    || null,
+  blurb:       b.blurb    || null,
+  description: splitDescriptions[b.asin] || b.blurb || null,
   rating:     b.myRating ? parseInt(b.myRating) : null,
   progress:   b.progress || null,
   cover_url:  b.cover ? `https://m.media-amazon.com/images/I/${b.cover}._SL200_.jpg` : null,
@@ -146,7 +175,8 @@ for (const book of sortedBooks) {
   if (series)        fullTxt += `- Series: ${series}\n`;
   if (book.myRating) fullTxt += `- My rating: ${book.myRating}/5\n`;
   if (book.progress) fullTxt += `- Progress: ${book.progress}\n`;
-  if (book.blurb)    fullTxt += `- Description: ${book.blurb}\n`;
+  const desc = splitDescriptions[book.asin] || book.blurb;
+  if (desc)          fullTxt += `- Description: ${desc}\n`;
   fullTxt += `- ASIN: ${book.asin}\n`;
   fullTxt += '\n';
 }
@@ -219,6 +249,20 @@ const bookCards = sortedBooks.map(book => {
     : null;
   const audibleUrl = `https://www.audible.com/pd/${book.asin}`;
 
+  const fullDesc = splitDescriptions[book.asin] || null;
+
+  let descHtml = '';
+  if (fullDesc) {
+    // Full description available: show blurb as the summary line, full text expanded
+    descHtml = `
+      <details class="full-desc">
+        <summary class="blurb">${escapeHtml(book.blurb)}</summary>
+        <p class="full-desc-text">${escapeHtml(fullDesc)}</p>
+      </details>`;
+  } else if (book.blurb) {
+    descHtml = `\n      <p class="blurb">${escapeHtml(book.blurb)}</p>`;
+  }
+
   return `  <article class="book">
     ${coverUrl
       ? `<img class="cover" src="${escapeHtml(coverUrl)}" alt="" loading="lazy" width="80" height="80">`
@@ -235,9 +279,7 @@ const bookCards = sortedBooks.map(book => {
           : ''}${progress
           ? `<span class="progress">${progress}</span>`
           : ''}
-      </p>${book.blurb
-        ? `\n      <p class="blurb">${escapeHtml(book.blurb)}</p>`
-        : ''}
+      </p>${descHtml}
     </div>
   </article>`;
 }).join('\n');
@@ -271,12 +313,18 @@ const html = `<!DOCTYPE html>
     .rating { color: #e08800; letter-spacing: 0.05em; }
     .progress { color: #0a7; font-weight: 500; }
     .blurb { margin: 0.4rem 0 0; font-size: 0.82rem; color: #444; }
+    details.full-desc { margin: 0.4rem 0 0; }
+    details.full-desc summary.blurb { cursor: pointer; list-style: none; margin: 0; }
+    details.full-desc summary.blurb::after { content: ' ▸ full'; font-size: 0.75rem; color: #0070f3; }
+    details.full-desc[open] summary.blurb::after { content: ' ▴ collapse'; }
+    .full-desc-text { margin: 0.4rem 0 0; padding: 0.5rem; background: #f9f9f9; border-radius: 4px; font-size: 0.82rem; line-height: 1.6; }
     .generated { text-align: center; font-size: 0.75rem; color: #aaa; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #eee; }
     @media (max-width: 480px) { .book { grid-template-columns: 60px 1fr; } .cover { width: 60px; height: 60px; } }
     @media (prefers-color-scheme: dark) {
       .stats { background: #1a1a1a; color: #aaa; }
       .meta, .subtitle, .subtitle { color: #888; }
       .blurb { color: #bbb; }
+      .full-desc-text { background: #1e1e1e; color: #bbb; }
       .book { border-color: #2a2a2a; }
       .cover-placeholder { background: #333; }
       .nav a { color: #4da6ff; }
