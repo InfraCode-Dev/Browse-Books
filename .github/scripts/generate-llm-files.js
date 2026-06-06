@@ -359,4 +359,77 @@ ${bookCards}
 fs.writeFileSync(path.join(repoRoot, 'library-list.html'), html);
 console.log('Generated library-list.html');
 
+// ── 4. Patch index.html (CI workspace only, never committed) ──────────────────
+// Adds a <link rel="alternate"> discovery tag and upgrades the bare <noscript>
+// with a link to library-list.html so non-JS visitors and crawlers aren't
+// stranded on a blank page.
+
+const indexPath = path.join(repoRoot, 'index.html');
+let indexHtml = fs.readFileSync(indexPath, 'utf8');
+
+const altLink = '<link rel="alternate" type="text/html" href="./library-list.html" title="Browse without JavaScript">';
+const betterNoscript = '<noscript><p style="font-family:sans-serif;padding:2rem">JavaScript is required for the interactive view. <a href="./library-list.html">Browse the library without JavaScript →</a></p></noscript>';
+
+let indexPatched = false;
+
+if (!indexHtml.includes('rel="alternate"')) {
+  indexHtml = indexHtml.replace('</head>', `${altLink}</head>`);
+  indexPatched = true;
+}
+
+if (indexHtml.includes('<noscript>This library requires javascript to work!</noscript>')) {
+  indexHtml = indexHtml.replace(
+    '<noscript>This library requires javascript to work!</noscript>',
+    betterNoscript
+  );
+  indexPatched = true;
+}
+
+if (indexPatched) {
+  fs.writeFileSync(indexPath, indexHtml);
+  console.log('Patched index.html (alternate link + noscript)');
+} else {
+  console.log('index.html already patched, skipping');
+}
+
+// ── 5. sitemap.xml ────────────────────────────────────────────────────────────
+
+const base = 'https://infracode-dev.github.io/Browse-Books';
+const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>${base}/library-list.html</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>${base}/library.json</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>${base}/llms.txt</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>${base}/llms-full.txt</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>${base}/</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.6</priority>
+  </url>
+</urlset>`;
+
+fs.writeFileSync(path.join(repoRoot, 'sitemap.xml'), sitemap);
+console.log('Generated sitemap.xml');
+
 console.log('Done.');

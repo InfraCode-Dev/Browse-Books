@@ -1,6 +1,8 @@
 User-agent: *
 Allow: /
 
+Sitemap: https://infracode-dev.github.io/Browse-Books/sitemap.xml
+
 # LLM-readable versions of this audiobook library:
 # Short index:      https://infracode-dev.github.io/Browse-Books/llms.txt
 # Full book list:   https://infracode-dev.github.io/Browse-Books/llms-full.txt
