@@ -67,15 +67,43 @@ function normalizeBook(b) {
   };
 }
 
+// Reads data/split-book-data/[ASIN].[cacheID].js files.
+// Each sets window.bookSummaryJSON = "<p>...</p>" (a JSON-encoded HTML string).
+// Returns ASIN → plain-text description map.
+function loadSplitDescriptions() {
+  const splitDir = path.join(dataDir, 'split-book-data');
+  const map = {};
+  if (!fs.existsSync(splitDir)) return map;
+  for (const file of fs.readdirSync(splitDir)) {
+    const match = file.match(/^([^.]+)\.\d+\.js$/);
+    if (!match) continue;
+    const asin = match[1];
+    try {
+      const content = fs.readFileSync(path.join(splitDir, file), 'utf8');
+      const prefix  = 'window.bookSummaryJSON = ';
+      const start   = content.indexOf(prefix);
+      if (start === -1) continue;
+      // Value is a JS string literal (quoted HTML), JSON.parse unwraps the quotes.
+      const html = JSON.parse(content.slice(start + prefix.length).trimEnd().replace(/;\s*$/, ''));
+      const text = decodeHtmlEntities(html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+      if (text) map[asin] = text;
+    } catch { /* skip malformed files */ }
+  }
+  return map;
+}
+
 // ── load data ─────────────────────────────────────────────────────────────────
 
 const dataFiles  = fs.readdirSync(dataDir);
 const libraryFile = dataFiles.find(f => /^library\.\d+\.js$/.test(f));
 if (!libraryFile) { console.error('No library.*.js file found in data/'); process.exit(1); }
 
-const books      = parseJsDataFile(path.join(dataDir, libraryFile), 'libraryJSON').map(normalizeBook);
-const today      = new Date().toISOString().split('T')[0];
-const sortedBooks = [...books].sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+const books            = parseJsDataFile(path.join(dataDir, libraryFile), 'libraryJSON').map(normalizeBook);
+const splitDescriptions = loadSplitDescriptions();
+const today            = new Date().toISOString().split('T')[0];
+const sortedBooks      = [...books].sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+
+console.log(`Loaded ${Object.keys(splitDescriptions).length} full descriptions from split-book-data`);
 
 const finished   = books.filter(b => b.progress === 'Finished').length;
 const inProgress = books.filter(b => b.progress && b.progress !== 'Finished').length;
@@ -105,7 +133,8 @@ const cleanBooks = books.map(b => ({
     bookNumber: s.bookNumbers ? s.bookNumbers.join('/') : null,
     asin:       s.asin || null,
   })),
-  blurb:      b.blurb    || null,
+  blurb:       b.blurb    || null,
+  description: splitDescriptions[b.asin] || b.blurb || null,
   rating:     b.myRating ? parseInt(b.myRating) : null,
   progress:   b.progress || null,
   cover_url:  b.cover ? `https://m.media-amazon.com/images/I/${b.cover}._SL200_.jpg` : null,
@@ -115,23 +144,22 @@ const cleanBooks = books.map(b => ({
 fs.writeFileSync(path.join(repoRoot, 'library.json'), JSON.stringify(cleanBooks, null, 2));
 console.log('Generated library.json');
 
-// ── 2. llms.txt ───────────────────────────────────────────────────────────────
+// ── 2a. llms-full.txt (complete per-book dump) ────────────────────────────────
 
-let txt = `# My Audible Library
+let fullTxt = `# My Audible Library — Full Book List
 
-A personal audiobook library with ${books.length} titles.
+A personal audiobook library with ${books.length} titles, sorted A–Z.
 
-> Interactive site:     https://infracode-dev.github.io/Browse-Books/#/library
-> Static HTML version:  https://infracode-dev.github.io/Browse-Books/library-list.html
+> Interactive site:      https://infracode-dev.github.io/Browse-Books/#/library
+> Static HTML version:   https://infracode-dev.github.io/Browse-Books/library-list.html
 > Machine-readable JSON: https://infracode-dev.github.io/Browse-Books/library.json
+> Short index (llms.txt): https://infracode-dev.github.io/Browse-Books/llms.txt
 > Last generated: ${today}
 
-## Summary
+## Stats
 
 - Total: ${books.length} audiobooks
-- Finished: ${finished}
-- In progress: ${inProgress}
-- Not started: ${books.length - finished - inProgress}
+- Finished: ${finished} | In progress: ${inProgress} | Not started: ${books.length - finished - inProgress}
 - Rated: ${rated}
 
 ## Books (A–Z)
@@ -141,19 +169,71 @@ A personal audiobook library with ${books.length} titles.
 for (const book of sortedBooks) {
   const narr   = narratorNames(book);
   const series = seriesLabel(book);
-  txt += `### ${book.title}\n`;
-  txt += `- Author(s): ${authorNames(book)}\n`;
-  if (narr)        txt += `- Narrator(s): ${narr}\n`;
-  if (series)      txt += `- Series: ${series}\n`;
-  if (book.myRating) txt += `- My rating: ${book.myRating}/5\n`;
-  if (book.progress) txt += `- Progress: ${book.progress}\n`;
-  if (book.blurb)  txt += `- Description: ${book.blurb}\n`;
-  txt += `- ASIN: ${book.asin}\n`;
-  txt += '\n';
+  fullTxt += `### ${book.title}\n`;
+  fullTxt += `- Author(s): ${authorNames(book)}\n`;
+  if (narr)          fullTxt += `- Narrator(s): ${narr}\n`;
+  if (series)        fullTxt += `- Series: ${series}\n`;
+  if (book.myRating) fullTxt += `- My rating: ${book.myRating}/5\n`;
+  if (book.progress) fullTxt += `- Progress: ${book.progress}\n`;
+  const desc = splitDescriptions[book.asin] || book.blurb;
+  if (desc)          fullTxt += `- Description: ${desc}\n`;
+  fullTxt += `- ASIN: ${book.asin}\n`;
+  fullTxt += '\n';
 }
 
-fs.writeFileSync(path.join(repoRoot, 'llms.txt'), txt);
-console.log('Generated llms.txt');
+fs.writeFileSync(path.join(repoRoot, 'llms-full.txt'), fullTxt);
+console.log('Generated llms-full.txt');
+
+// ── 2b. llms.txt (short navigational index, per llmstxt.org convention) ──────
+
+const topRated = books
+  .filter(b => b.myRating === '5')
+  .sort((a, b) => (b.added || 0) - (a.added || 0))
+  .slice(0, 10);
+
+const recentlyAdded = [...books]
+  .sort((a, b) => (b.added || 0) - (a.added || 0))
+  .slice(0, 5);
+
+function bookOneLiner(book) {
+  const authors = authorNames(book);
+  const narr    = narratorNames(book);
+  const series  = seriesLabel(book);
+  let line = `- ${book.title} — by ${authors}`;
+  if (narr)   line += `, narrated by ${narr}`;
+  if (series) line += ` (${series})`;
+  return line;
+}
+
+let indexTxt = `# My Audible Library
+
+> A personal Audible audiobook library with ${books.length} titles.
+> Last generated: ${today}
+
+## Formats
+
+- Full book list (plain text, A–Z): https://infracode-dev.github.io/Browse-Books/llms-full.txt
+- Machine-readable JSON:            https://infracode-dev.github.io/Browse-Books/library.json
+- Static HTML (no JavaScript):      https://infracode-dev.github.io/Browse-Books/library-list.html
+- Interactive site:                 https://infracode-dev.github.io/Browse-Books/#/library
+
+## Stats
+
+- Total: ${books.length} audiobooks
+- Finished: ${finished} | In progress: ${inProgress} | Not started: ${books.length - finished - inProgress}
+- Rated: ${rated}
+
+## Top Rated (5★, most recent first)
+
+${topRated.map(bookOneLiner).join('\n')}
+
+## Recently Added
+
+${recentlyAdded.map(bookOneLiner).join('\n')}
+`;
+
+fs.writeFileSync(path.join(repoRoot, 'llms.txt'), indexTxt);
+console.log('Generated llms.txt (short index)');
 
 // ── 3. library-list.html ──────────────────────────────────────────────────────
 
@@ -168,6 +248,20 @@ const bookCards = sortedBooks.map(book => {
     ? `https://m.media-amazon.com/images/I/${book.cover}._SL200_.jpg`
     : null;
   const audibleUrl = `https://www.audible.com/pd/${book.asin}`;
+
+  const fullDesc = splitDescriptions[book.asin] || null;
+
+  let descHtml = '';
+  if (fullDesc) {
+    // Full description available: show blurb as the summary line, full text expanded
+    descHtml = `
+      <details class="full-desc">
+        <summary class="blurb">${escapeHtml(book.blurb)}</summary>
+        <p class="full-desc-text">${escapeHtml(fullDesc)}</p>
+      </details>`;
+  } else if (book.blurb) {
+    descHtml = `\n      <p class="blurb">${escapeHtml(book.blurb)}</p>`;
+  }
 
   return `  <article class="book">
     ${coverUrl
@@ -185,9 +279,7 @@ const bookCards = sortedBooks.map(book => {
           : ''}${progress
           ? `<span class="progress">${progress}</span>`
           : ''}
-      </p>${book.blurb
-        ? `\n      <p class="blurb">${escapeHtml(book.blurb)}</p>`
-        : ''}
+      </p>${descHtml}
     </div>
   </article>`;
 }).join('\n');
@@ -221,12 +313,18 @@ const html = `<!DOCTYPE html>
     .rating { color: #e08800; letter-spacing: 0.05em; }
     .progress { color: #0a7; font-weight: 500; }
     .blurb { margin: 0.4rem 0 0; font-size: 0.82rem; color: #444; }
+    details.full-desc { margin: 0.4rem 0 0; }
+    details.full-desc summary.blurb { cursor: pointer; list-style: none; margin: 0; }
+    details.full-desc summary.blurb::after { content: ' ▸ full'; font-size: 0.75rem; color: #0070f3; }
+    details.full-desc[open] summary.blurb::after { content: ' ▴ collapse'; }
+    .full-desc-text { margin: 0.4rem 0 0; padding: 0.5rem; background: #f9f9f9; border-radius: 4px; font-size: 0.82rem; line-height: 1.6; }
     .generated { text-align: center; font-size: 0.75rem; color: #aaa; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #eee; }
     @media (max-width: 480px) { .book { grid-template-columns: 60px 1fr; } .cover { width: 60px; height: 60px; } }
     @media (prefers-color-scheme: dark) {
       .stats { background: #1a1a1a; color: #aaa; }
       .meta, .subtitle, .subtitle { color: #888; }
       .blurb { color: #bbb; }
+      .full-desc-text { background: #1e1e1e; color: #bbb; }
       .book { border-color: #2a2a2a; }
       .cover-placeholder { background: #333; }
       .nav a { color: #4da6ff; }
@@ -242,6 +340,7 @@ const html = `<!DOCTYPE html>
     <a href="./#/library">Interactive view</a>
     <a href="./library.json">JSON data</a>
     <a href="./llms.txt">llms.txt</a>
+    <a href="./llms-full.txt">llms-full.txt</a>
   </nav>
   <div class="stats" aria-label="Library statistics">
     <span>${books.length} total</span>
@@ -259,5 +358,78 @@ ${bookCards}
 
 fs.writeFileSync(path.join(repoRoot, 'library-list.html'), html);
 console.log('Generated library-list.html');
+
+// ── 4. Patch index.html (CI workspace only, never committed) ──────────────────
+// Adds a <link rel="alternate"> discovery tag and upgrades the bare <noscript>
+// with a link to library-list.html so non-JS visitors and crawlers aren't
+// stranded on a blank page.
+
+const indexPath = path.join(repoRoot, 'index.html');
+let indexHtml = fs.readFileSync(indexPath, 'utf8');
+
+const altLink = '<link rel="alternate" type="text/html" href="./library-list.html" title="Browse without JavaScript">';
+const betterNoscript = '<noscript><p style="font-family:sans-serif;padding:2rem">JavaScript is required for the interactive view. <a href="./library-list.html">Browse the library without JavaScript →</a></p></noscript>';
+
+let indexPatched = false;
+
+if (!indexHtml.includes('rel="alternate"')) {
+  indexHtml = indexHtml.replace('</head>', `${altLink}</head>`);
+  indexPatched = true;
+}
+
+if (indexHtml.includes('<noscript>This library requires javascript to work!</noscript>')) {
+  indexHtml = indexHtml.replace(
+    '<noscript>This library requires javascript to work!</noscript>',
+    betterNoscript
+  );
+  indexPatched = true;
+}
+
+if (indexPatched) {
+  fs.writeFileSync(indexPath, indexHtml);
+  console.log('Patched index.html (alternate link + noscript)');
+} else {
+  console.log('index.html already patched, skipping');
+}
+
+// ── 5. sitemap.xml ────────────────────────────────────────────────────────────
+
+const base = 'https://infracode-dev.github.io/Browse-Books';
+const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>${base}/library-list.html</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>${base}/library.json</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>${base}/llms.txt</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>${base}/llms-full.txt</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>${base}/</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.6</priority>
+  </url>
+</urlset>`;
+
+fs.writeFileSync(path.join(repoRoot, 'sitemap.xml'), sitemap);
+console.log('Generated sitemap.xml');
 
 console.log('Done.');
