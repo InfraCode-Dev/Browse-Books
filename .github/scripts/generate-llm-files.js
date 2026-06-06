@@ -14,7 +14,7 @@ const path = require('path');
 const repoRoot = path.join(__dirname, '../..');
 const dataDir  = path.join(repoRoot, 'data');
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// ── helpers ────────────────────────────────────────────────────────────────────────────
 
 function parseJsDataFile(filePath, varName) {
   const content = fs.readFileSync(filePath, 'utf8');
@@ -67,14 +67,40 @@ function normalizeBook(b) {
   };
 }
 
-// Reads data/split-book-data/[ASIN].[cacheID].js files.
-// Each sets window.bookSummaryJSON = "<p>...</p>" (a JSON-encoded HTML string).
-// Returns ASIN → plain-text description map.
-function loadSplitDescriptions() {
+// Reads split-book-data files and returns an ASIN → plain-text description map.
+// Handles two formats:
+//   New: chunk-N.[cacheID].json — array of { asin, summary, ... } objects
+//   Old: [ASIN].[cacheID].js   — window.bookSummaryJSON = "...HTML..."
+// When cacheID is provided, only chunk files matching that cacheID are read.
+function loadSplitDescriptions(cacheID) {
   const splitDir = path.join(dataDir, 'split-book-data');
   const map = {};
   if (!fs.existsSync(splitDir)) return map;
-  for (const file of fs.readdirSync(splitDir)) {
+  const files = fs.readdirSync(splitDir);
+  // New format: chunk-N.[cacheID].json
+  const chunkFiles = files.filter(f => {
+    const m = f.match(/^chunk-(\d+)\.(\d+)\.json$/);
+    return m && (!cacheID || m[2] === cacheID);
+  });
+  if (chunkFiles.length > 0) {
+    console.log(`Reading ${chunkFiles.length} chunk file(s) from split-book-data (new format)`);
+    for (const file of chunkFiles) {
+      try {
+        const entries = JSON.parse(fs.readFileSync(path.join(splitDir, file), 'utf8'));
+        for (const entry of entries) {
+          if (entry.asin && entry.summary) {
+            const text = decodeHtmlEntities(
+              entry.summary.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+            );
+            if (text) map[entry.asin] = text;
+          }
+        }
+      } catch { /* skip malformed files */ }
+    }
+    return map;
+  }
+  // Old format: [ASIN].[cacheID].js — window.bookSummaryJSON = "...HTML..."
+  for (const file of files) {
     const match = file.match(/^([^.]+)\.\d+\.js$/);
     if (!match) continue;
     const asin = match[1];
@@ -92,16 +118,20 @@ function loadSplitDescriptions() {
   return map;
 }
 
-// ── load data ─────────────────────────────────────────────────────────────────
+// ── load data ─────────────────────────────────────────────────────────────────────────────
 
-const dataFiles  = fs.readdirSync(dataDir);
-const libraryFile = dataFiles.find(f => /^library\.\d+\.js$/.test(f));
-if (!libraryFile) { console.error('No library.*.js file found in data/'); process.exit(1); }
+const dataFiles    = fs.readdirSync(dataDir);
+const libraryFiles = dataFiles.filter(f => /^library\.\d+\.js$/.test(f));
+if (!libraryFiles.length) { console.error('No library.*.js file found in data/'); process.exit(1); }
+const libraryFile = libraryFiles.sort((a, b) =>
+  parseInt(b.match(/\.(\d+)\.js$/)[1]) - parseInt(a.match(/\.(\d+)\.js$/)[1])
+)[0];
+const cacheID = libraryFile.match(/\.(\d+)\.js$/)[1];
 
-const books            = parseJsDataFile(path.join(dataDir, libraryFile), 'libraryJSON').map(normalizeBook);
-const splitDescriptions = loadSplitDescriptions();
-const today            = new Date().toISOString().split('T')[0];
-const sortedBooks      = [...books].sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+const books             = parseJsDataFile(path.join(dataDir, libraryFile), 'libraryJSON').map(normalizeBook);
+const splitDescriptions = loadSplitDescriptions(cacheID);
+const today             = new Date().toISOString().split('T')[0];
+const sortedBooks       = [...books].sort((a, b) => (a.title || '').localeCompare(b.title || ''));
 
 console.log(`Loaded ${Object.keys(splitDescriptions).length} full descriptions from split-book-data`);
 
@@ -111,7 +141,7 @@ const rated      = books.filter(b => b.myRating).length;
 
 console.log(`Loaded ${books.length} books from ${libraryFile}`);
 
-// ── helpers for per-book metadata ─────────────────────────────────────────────
+// ── helpers for per-book metadata ─────────────────────────────────────────────────────────────────
 
 function authorNames(book)   { return (book.authors   || []).map(a => a.name).join(', '); }
 function narratorNames(book) { return (book.narrators  || []).map(n => n.name).join(', '); }
@@ -121,7 +151,7 @@ function seriesLabel(book) {
     .join('; ');
 }
 
-// ── 1. library.json ───────────────────────────────────────────────────────────
+// ── 1. library.json ──────────────────────────────────────────────────────────────────────────────
 
 const cleanBooks = books.map(b => ({
   title:      b.title,
@@ -144,7 +174,7 @@ const cleanBooks = books.map(b => ({
 fs.writeFileSync(path.join(repoRoot, 'library.json'), JSON.stringify(cleanBooks, null, 2));
 console.log('Generated library.json');
 
-// ── 2a. llms-full.txt (complete per-book dump) ────────────────────────────────
+// ── 2a. llms-full.txt (complete per-book dump) ──────────────────────────────────────────────
 
 let fullTxt = `# My Audible Library — Full Book List
 
@@ -184,7 +214,7 @@ for (const book of sortedBooks) {
 fs.writeFileSync(path.join(repoRoot, 'llms-full.txt'), fullTxt);
 console.log('Generated llms-full.txt');
 
-// ── 2b. llms.txt (short navigational index, per llmstxt.org convention) ──────
+// ── 2b. llms.txt (short navigational index, per llmstxt.org convention) ──────────────────
 
 const topRated = books
   .filter(b => b.myRating === '5')
@@ -235,7 +265,7 @@ ${recentlyAdded.map(bookOneLiner).join('\n')}
 fs.writeFileSync(path.join(repoRoot, 'llms.txt'), indexTxt);
 console.log('Generated llms.txt (short index)');
 
-// ── 3. library-list.html ──────────────────────────────────────────────────────
+// ── 3. library-list.html ──────────────────────────────────────────────────────────────────────────────
 
 const bookCards = sortedBooks.map(book => {
   const authors  = escapeHtml(authorNames(book));
@@ -359,7 +389,7 @@ ${bookCards}
 fs.writeFileSync(path.join(repoRoot, 'library-list.html'), html);
 console.log('Generated library-list.html');
 
-// ── 4. Patch index.html (CI workspace only, never committed) ──────────────────
+// ── 4. Patch index.html (CI workspace only, never committed) ──────────────────────────────────
 // Adds a <link rel="alternate"> discovery tag and upgrades the bare <noscript>
 // with a link to library-list.html so non-JS visitors and crawlers aren't
 // stranded on a blank page.
@@ -392,7 +422,7 @@ if (indexPatched) {
   console.log('index.html already patched, skipping');
 }
 
-// ── 5. sitemap.xml ────────────────────────────────────────────────────────────
+// ── 5. sitemap.xml ──────────────────────────────────────────────────────────────────────────────
 
 const base = 'https://infracode-dev.github.io/Browse-Books';
 const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
